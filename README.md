@@ -1,2 +1,0 @@
-"# ChickYen-Frontend" 
-"# ChickYen-Backend" 
