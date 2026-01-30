@@ -2,10 +2,10 @@ const mongoose = require("mongoose");
 
 const orderSchema = new mongoose.Schema({
   // Link to the specific Customer account
-  customerId: { 
-    type: mongoose.Schema.Types.ObjectId, 
+  customerId: {
+    type: mongoose.Schema.Types.ObjectId,
     ref: "Customer",
-    required: true 
+    required: true
   },
   orderId: { type: String, unique: true, required: true },
   customerName: String,
@@ -26,11 +26,17 @@ const orderSchema = new mongoose.Schema({
     }
   ],
   totalAmount: Number,
-  status: { 
-    type: String, 
+  paymentMethod: {
+    type: String,
+    enum: ["upi", "cod"],
+    required: true,
+    default: "cod"
+  },
+  status: {
+    type: String,
     // Updated workflow sequence
-    enum: ["Processing", "Verified", "Packed", "Out for Delivery", "Delivered", "Cancelled"], 
-    default: "Processing" 
+    enum: ["Processing", "Verified", "Packed", "Out for Delivery", "Delivered", "Cancelled"],
+    default: "Processing"
   },
   createdAt: { type: Date, default: Date.now }
 });

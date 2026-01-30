@@ -9,13 +9,28 @@ const customerSchema = new mongoose.Schema(
     },
     password: {
       type: String,
-      required: true
     },
 
     // extra details (after signup)
     name: String,
     phone: String,
-    address: String
+    address: String,
+
+    // Email verification fields
+    emailOtp: String,
+    otpExpires: Date,
+    isEmailVerified: {
+      type: Boolean,
+      default: false
+    },
+
+    // Phone verification fields
+    phoneOtp: String,
+    phoneOtpExpires: Date,
+    isPhoneVerified: {
+      type: Boolean,
+      default: false
+    }
   },
   { timestamps: true }
 );

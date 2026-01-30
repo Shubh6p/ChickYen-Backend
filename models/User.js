@@ -4,7 +4,11 @@ const userSchema = new mongoose.Schema(
   {
     name: { type: String },
     email: { type: String, required: true, unique: true },
-    password: { type: String, required: true },
+    // Password removed for OTP-only auth
+    // password: { type: String, required: true }, 
+
+    otp: { type: String },
+    otpExpires: { type: Date },
 
     role: {
       type: String,

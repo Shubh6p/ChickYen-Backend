@@ -8,6 +8,8 @@ const orderRoutes = require("./routes/orderRoutes");
 const productRoutes = require("./routes/productRoutes");
 const customerAuthRoutes = require("./routes/customerAuthRoutes");
 const locationRoutes = require("./routes/locationRoutes");
+const reviewRoutes = require("./routes/reviewRoutes");
+const contactRoutes = require("./routes/contactRoutes");
 
 
 
@@ -25,6 +27,9 @@ app.use("/api/orders", orderRoutes);
 app.use("/api/products", productRoutes);
 app.use("/api/customers", customerAuthRoutes);
 app.use("/api/locations", locationRoutes);
+app.use("/api/reviews", reviewRoutes);
+app.use("/api/contact", contactRoutes);
+app.use("/uploads", express.static("uploads"));
 
 app.get("/", (req, res) => { res.send("Yen Achar Backend is running 🚀"); });
 
