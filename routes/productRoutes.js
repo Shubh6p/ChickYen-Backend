@@ -23,7 +23,7 @@ router.get("/", adminProtect, async (req, res) => {
 // PUBLIC: Get
 router.get("/public", async (req, res) => {
   try {
-    const products = await Product.find().sort({ createdAt: -1 });
+    const products = await Product.find({ isAvailable: true }).sort({ createdAt: -1 });
     res.json(products);
   } catch { res.status(500).json({ error: "Failed to fetch" }); }
 });

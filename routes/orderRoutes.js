@@ -4,20 +4,101 @@ const Order = require("../models/Order");
 const customerProtect = require("../middleware/customerMiddleware");
 const adminProtect = require("../middleware/adminMiddleware");
 const { sendOrderStatusUpdate } = require("../utils/whatsappService");
+const { sendEmail } = require("../utils/emailService");
+const ActivityLog = require("../models/ActivityLog");
 
 // PLACE ORDER (Public)
 const Product = require("../models/Product"); // Ensure Product model is imported
 
-// POST: Place Order (UPDATED: Removed stock decrement logic)
-router.post("/place", async (req, res) => {
+// POST: Place Order (Secured)
+router.post("/place", customerProtect, async (req, res) => {
     try {
         const orderId = "CYA-" + Math.random().toString(36).substr(2, 9).toUpperCase();
-        const { paymentMethod = "cod" } = req.body;
-        // Only save the order record; do NOT update Product stock here
-        const newOrder = new Order({ ...req.body, orderId, paymentMethod });
+        const { paymentMethod = "cod", items, pickupLocation } = req.body;
+        
+        if (!items || items.length === 0) {
+            return res.status(400).json({ error: "Cart is empty" });
+        }
+
+        // 🚀 STOCK VALIDATION AND PRICE CALCULATION
+        let calculatedTotal = 0;
+        const verifiedItems = [];
+
+        for (const item of items) {
+            const pId = item.productId;
+            if (!pId) return res.status(400).json({ error: "Invalid product in cart" });
+
+            const product = await Product.findById(pId);
+            if (!product) return res.status(404).json({ error: `Product not found` });
+
+            if (!product.isAvailable) {
+                return res.status(400).json({ error: `Product ${product.name} is no longer available` });
+            }
+
+            if (product.stock < item.quantity) {
+                return res.status(400).json({ 
+                    error: `Not enough stock for ${product.name}. Only ${product.stock} left.` 
+                });
+            }
+
+            calculatedTotal += product.price * item.quantity;
+            verifiedItems.push({
+                productId: product._id,
+                name: product.name,
+                price: product.price, // Trusting DB price, ignoring frontend price
+                quantity: item.quantity,
+                weight: product.weight
+            });
+        }
+
+        // Save the order record
+        const newOrder = new Order({ 
+            ...req.body, 
+            customerId: req.user._id, // Enforce authenticated user
+            items: verifiedItems,
+            totalAmount: calculatedTotal,
+            orderId, 
+            paymentMethod 
+        });
+        console.log("DEBUG: Order payload before save:", JSON.stringify(newOrder.toObject(), null, 2));
         await newOrder.save();
-        res.status(201).json({ success: true, orderId });
+
+        // 🚀 STOCK REDUCTION
+        for (const item of verifiedItems) {
+            await Product.findByIdAndUpdate(item.productId, { 
+                $inc: { stock: -item.quantity } 
+            });
+        }
+
+        // 🚀 CREATE ACTIVITY LOG
+        await ActivityLog.create({
+            type: "NEW_ORDER",
+            message: `New order placed: ${orderId} (Total: ₹${calculatedTotal})`,
+            metadata: { orderId, totalAmount: calculatedTotal, customerId: req.user._id }
+        });
+
+        // 🚀 SEND ADMIN NOTIFICATION EMAIL
+        const adminEmail = process.env.EMAIL_USER;
+        if (adminEmail) {
+            const emailHtml = `
+                <h2>New Order Received!</h2>
+                <p><strong>Order ID:</strong> ${orderId}</p>
+                <p><strong>Total Amount:</strong> ₹${calculatedTotal}</p>
+                <p><strong>Payment Method:</strong> ${paymentMethod.toUpperCase()}</p>
+                <hr />
+                <h3>Items:</h3>
+                <ul>
+                    ${verifiedItems.map(item => `<li>${item.name} (${item.weight}) x ${item.quantity} = ₹${item.price * item.quantity}</li>`).join("")}
+                </ul>
+                <br />
+                <p><a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/admin/orders">Go to Admin Panel</a></p>
+            `;
+            sendEmail(adminEmail, `🚀 New Order Placed: ${orderId}`, `New order placed: ${orderId} for ₹${calculatedTotal}`, emailHtml);
+        }
+
+        res.status(201).json({ success: true, orderId, totalAmount: calculatedTotal });
     } catch (err) {
+        console.error(err);
         res.status(500).json({ error: "Order creation failed" });
     }
 });
@@ -31,19 +112,17 @@ router.put("/status/:id", adminProtect, async (req, res) => {
 
         if (!order) return res.status(404).json({ error: "Order not found" });
 
-        // 🚀 STOCK LOGIC: Only decrease if moving from 'Processing' to 'Verified'
-        if (status === "Verified" && order.status === "Processing") {
+        // 🚀 STOCK LOGIC: Restore stock if order is Cancelled
+        if (status === "Cancelled" && order.status !== "Cancelled") {
             const Product = require("../models/Product");
 
             for (const item of order.items) {
-                // Look for the new productId field
                 const pId = item.productId;
 
                 if (pId) {
                     const product = await Product.findById(pId);
                     if (product) {
-                        // Ensure we don't go below zero stock
-                        const newStock = Math.max(0, product.stock - item.quantity);
+                        const newStock = product.stock + item.quantity;
                         await Product.findByIdAndUpdate(pId, { stock: newStock });
                     }
                 }
@@ -100,6 +179,8 @@ router.get("/invoice/:id", async (req, res) => {
 
         if (!isAdmin && !isOwner) return res.status(403).send("Permission denied");
         if (!isAdmin && order.status !== "Delivered") return res.status(403).send("Invoice ready after delivery");
+
+        res.setHeader("Content-Security-Policy", "script-src 'self' 'unsafe-inline'");
 
         res.send(`
         <html lang="en">
@@ -236,8 +317,30 @@ router.get("/invoice/:id", async (req, res) => {
                   .btn:hover { transform: scale(1.05); }
 
                   @media print {
-                      body { background: white; }
-                      .invoice-box { border: none; box-shadow: none; margin: 0; padding: 20px; }
+                      @page {
+                          margin: 0;
+                          size: auto;
+                      }
+                      body { 
+                          background: white; 
+                          margin: 0;
+                          padding: 15px;
+                      }
+                      .invoice-box { 
+                          border: none; 
+                          box-shadow: none; 
+                          margin: 0; 
+                          padding: 0;
+                          max-width: 100%;
+                          page-break-inside: avoid;
+                      }
+                      .header { margin-bottom: 20px; padding-bottom: 15px; }
+                      .grid { margin-bottom: 20px; gap: 20px; }
+                      .info-block { margin-bottom: 20px !important; }
+                      table { margin-bottom: 20px; }
+                      th, td { padding: 10px; }
+                      .total-box { padding: 15px 30px; }
+                      .footer-text { margin-top: 30px !important; }
                       .actions { display: none; }
                   }
               </style>
@@ -306,10 +409,10 @@ router.get("/invoice/:id", async (req, res) => {
                   </div>
 
                   <div class="actions">
-                      <button class="btn" onclick="window.print()">Print Invoice</button>
+                      <button id="printBtn" class="btn">Print Invoice</button>
                   </div>
 
-                  <div style="margin-top: 60px; text-align: center; font-size: 11px; color: #94a3b8;">
+                  <div class="footer-text" style="margin-top: 60px; text-align: center; font-size: 11px; color: #94a3b8;">
                       <p>Thank you for choosing Yen Achar! Follow us for more spicy updates.</p>
                   </div>
               </div>
@@ -317,6 +420,9 @@ router.get("/invoice/:id", async (req, res) => {
               <script>
                   document.getElementById('currentDate').innerText = new Date().toLocaleDateString('en-IN', {
                       year: 'numeric', month: 'long', day: 'numeric'
+                  });
+                  document.getElementById('printBtn').addEventListener('click', function() {
+                      window.print();
                   });
               </script>
           </body>

@@ -6,7 +6,6 @@ const multer = require("multer");
 const path = require("path");
 
 // MULTER CONFIG
-// Ensure the 'uploads' directory exists in your root or handle it dynamically.
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         cb(null, "uploads/");
@@ -15,12 +14,29 @@ const storage = multer.diskStorage({
         cb(null, `review-${Date.now()}${path.extname(file.originalname)}`);
     }
 });
-const upload = multer({ storage });
+
+const fileFilter = (req, file, cb) => {
+    // Restrict file types to images
+    const allowedTypes = /jpeg|jpg|png|webp/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype);
+
+    if (extname && mimetype) {
+        return cb(null, true);
+    }
+    cb(new Error("Only image files are allowed!"));
+};
+
+const upload = multer({ 
+    storage,
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+    fileFilter
+});
 
 // GET ALL REVIEWS (User specific - for Order History)
 router.get("/all", customerProtect, async (req, res) => {
     try {
-        const reviews = await Review.find({ customerId: req.user._id });
+        const reviews = await Review.find({ customerId: req.user._id }).populate('orderId');
         res.json(reviews);
     } catch (err) {
         res.status(500).json({ error: "Failed to fetch reviews" });
@@ -30,7 +46,7 @@ router.get("/all", customerProtect, async (req, res) => {
 // GET PUBLIC APPROVED REVIEWS (For Wall of Love)
 router.get("/public", async (req, res) => {
     try {
-        const reviews = await Review.find({ status: "Approved" }).sort({ createdAt: -1 });
+        const reviews = await Review.find({ status: "Approved" }).populate('orderId').sort({ createdAt: -1 });
         res.json(reviews);
     } catch (err) {
         res.status(500).json({ error: "Failed to fetch reviews" });
@@ -74,7 +90,7 @@ router.post("/add", customerProtect, upload.single("reviewImage"), async (req, r
 router.get("/all-admin", async (req, res) => {
     try {
         // Fetch all reviews, sorted by newest
-        const reviews = await Review.find().sort({ createdAt: -1 });
+        const reviews = await Review.find().populate('orderId').sort({ createdAt: -1 });
         res.json(reviews);
     } catch (err) {
         res.status(500).json({ error: "Failed to fetch reviews" });

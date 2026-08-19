@@ -6,8 +6,17 @@ const adminProtect = require("../middleware/adminMiddleware");
 const nodemailer = require("nodemailer");
 // const twilio = require('twilio');
 const { sendWhatsAppOTP } = require("../utils/whatsappService");
+const firebaseAdmin = require("../utils/firebaseAdmin");
+const ActivityLog = require("../models/ActivityLog");
+const rateLimit = require("express-rate-limit");
 
 const router = express.Router();
+
+const otpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // Limit each IP to 5 requests per windowMs
+  message: { error: "Too many OTP requests from this IP, please try again after 15 minutes." }
+});
 
 // const client = twilio(
 //   process.env.TWILIO_ACCOUNT_SID, 
@@ -23,7 +32,7 @@ const router = express.Router();
 /* =========================
    EMAIL OTP - SEND
 ========================= */
-router.post("/send-email-otp", async (req, res) => {
+router.post("/send-email-otp", otpLimiter, async (req, res) => {
   const email = req.body.email?.toLowerCase();
   if (!email) return res.status(400).json({ error: "Email is required" });
 
@@ -121,10 +130,19 @@ router.post("/verify-email-otp", async (req, res) => {
       return res.status(400).json({ error: "OTP expired" });
     }
 
+    const wasVerified = customer.isEmailVerified;
     customer.isEmailVerified = true;
     customer.emailOtp = undefined;
     customer.otpExpires = undefined;
     await customer.save();
+
+    if (!wasVerified) {
+      await ActivityLog.create({
+        type: "NEW_USER_REGISTRATION",
+        message: `New user registered: ${email}`,
+        metadata: { customerId: customer._id, email }
+      });
+    }
 
     // GENERATE TOKEN IMMEDIATELY (OTP-ONLY AUTH)
     const token = jwt.sign({ _id: customer._id }, process.env.JWT_SECRET, { expiresIn: "7d" });
@@ -232,6 +250,48 @@ router.post("/verify-phone-otp", async (req, res) => {
     res.json({ success: true, message: "Phone verified successfully!", isPhoneVerified: true });
   } catch (err) {
     res.status(401).json({ error: "Session expired or invalid token" });
+  }
+});
+
+/* =========================
+   FIREBASE PHONE VERIFY
+========================= */
+
+router.post("/verify-firebase-token", async (req, res) => {
+  const { idToken, phone } = req.body;
+  const token = req.headers.authorization?.split(" ")[1];
+
+  if (!idToken) return res.status(400).json({ error: "Security check failed (No Token)" });
+  if (!token) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    const decodedFirebaseToken = await firebaseAdmin.auth().verifyIdToken(idToken);
+
+    // Check if the verified phone matches (optional verification)
+    // const firebasePhone = decodedFirebaseToken.phone_number;
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const customer = await Customer.findById(decoded._id);
+
+    if (!customer) return res.status(404).json({ error: "Account not found" });
+
+    const wasVerified = customer.isPhoneVerified;
+    customer.isPhoneVerified = true;
+    if (phone) customer.phone = phone;
+    await customer.save();
+
+    if (!wasVerified) {
+      await ActivityLog.create({
+        type: "NEW_USER_REGISTRATION",
+        message: `New user verified phone: ${phone || customer.email}`,
+        metadata: { customerId: customer._id, phone }
+      });
+    }
+
+    res.json({ success: true, message: "Phone verified via Firebase!", isPhoneVerified: true });
+  } catch (err) {
+    console.error("Firebase Token Error:", err);
+    res.status(401).json({ error: "Invalid or expired Firebase verification" });
   }
 });
 
