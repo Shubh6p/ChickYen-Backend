@@ -21,7 +21,13 @@ const app = express();
 app.use(helmet());
 app.use(helmet.crossOriginResourcePolicy({ policy: "cross-origin" })); // Allow images to load on frontend
 app.use(cors({
-  origin: process.env.FRONTEND_URL || "http://localhost:5173",
+  origin: [
+    process.env.FRONTEND_URL, 
+    "http://localhost:5173", 
+    "https://chickyenachar.in", 
+    "https://www.chickyenachar.in",
+    "https://chickyen-frontend.vercel.app"
+  ].filter(Boolean),
   credentials: true
 }));
 app.use(express.json());
